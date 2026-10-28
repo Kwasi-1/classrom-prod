@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { eq, or } from "drizzle-orm";
+import { eq, or, sql } from "drizzle-orm";
 import { db, t } from "@/db";
+import { CreateClassroomForm } from "@/components/CreateClassroomForm";
 import { isOrgAdmin } from "@/lib/github";
 import { safeError } from "@/lib/log";
 import { requireUser } from "@/lib/session";
@@ -36,7 +37,7 @@ export default async function Dashboard() {
     .from(t.roster)
     .innerJoin(t.classrooms, eq(t.classrooms.id, t.roster.classroomId))
     .innerJoin(t.installations, eq(t.installations.id, t.classrooms.installationId))
-    .where(eq(t.roster.userId, user.id));
+    .where(eq(t.roster.githubLogin, sql`lower(${user.githubLogin})`));
 
   return (
     <div className="space-y-8">
@@ -62,6 +63,13 @@ export default async function Dashboard() {
           </ul>
         )}
       </section>
+
+      {adminOf.length > 0 && (
+        <section>
+          <h2 className="mb-3 text-lg font-semibold">New classroom</h2>
+          <CreateClassroomForm orgs={adminOf.map((i) => ({ id: i.id, login: i.orgLogin }))} />
+        </section>
+      )}
 
       <ClassroomList title="Teaching" rows={teaching} empty="You are not teaching any classrooms." />
       <ClassroomList title="Enrolled" rows={enrolled} empty="You are not on any classroom roster." />

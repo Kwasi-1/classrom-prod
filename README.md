@@ -6,7 +6,7 @@ GitHub **Free** organization, students submit by pushing, and every push is auto
 Stack: Next.js (App Router) + TypeScript, Neon Postgres via Drizzle ORM, a GitHub App (`@octokit/app`),
 `iron-session` cookies, Tailwind CSS. Deploys to Render.
 
-> Status: **Milestone 1 (skeleton)** — login, sessions, app install, webhook verification + idempotency, full schema.
+> Status: **Milestone 2** — login, app install, webhooks, classrooms (with grader repo seeding) and roster import.
 
 ---
 
@@ -101,6 +101,39 @@ Then open http://localhost:3000, sign in with GitHub, and click **Install on org
    is `{"ok":true,"duplicate":true}` and `webhook_deliveries` still has one row for it. A request with a bad
    signature gets `401`.
 
+## Manual test (Milestone 2)
+
+1. Run `npm run db:migrate` (adds migration `0001`: classroom slugs are now globally unique).
+2. On the dashboard, **New classroom**: pick the org, enter name, slug (e.g. `cs323`) and term.
+   - Only org **admins** can create classrooms (checked via `GET /orgs/{org}/memberships/{you}`).
+   - The app creates the private repo `{slug}-grader` in the org and commits
+     `.github/workflows/grade.yml`, `grader/run_tests.py` and `README.md`.
+3. You land on the classroom's **Settings** tab. Follow the instructions there to add the
+   `GRADER_CALLBACK_SECRET` repository secret to the grader repo (see below).
+4. **Roster** tab: paste or upload 5 GitHub usernames (one per line; CSV first column; optional
+   `github_username` header). The result shows added / duplicates / invalid counts; non-existent
+   usernames are listed as invalid and the rest are still imported. Import the same list again → all duplicates.
+5. Sign in as one of those students (another browser profile): the classroom shows under **Enrolled**
+   and `/c/{slug}` shows the student view. A user not on the roster gets a 404.
+
+### Grader repo secret
+
+Each classroom's grader repo needs one secret so the grading workflow can report results:
+**grader repo → Settings → Secrets and variables → Actions → New repository secret**,
+name `GRADER_CALLBACK_SECRET`, value = the app's `GRADER_CALLBACK_SECRET`.
+The callback URL (`APP_URL`) is written into `grade.yml` when the grader repo is seeded.
+
+### Seed data
+
+For local UI work without GitHub calls:
+
+```bash
+npm run db:seed -- your-github-login
+```
+
+This creates classroom `/c/demo101` (org `demo-org`) owned by you, with 8 fake students.
+GitHub-backed actions (roster validation, grader repo links) won't work against this demo data.
+
 ## Project layout
 
 ```
@@ -113,4 +146,10 @@ src/lib/queue.ts           in-process serial queue for webhook work
 src/lib/webhooks.ts        webhook event handlers
 src/app/api/auth/*         login / install / callback / logout
 src/app/api/webhooks/github  signature verification + delivery idempotency
+src/app/api/classrooms/*   create classroom, roster import
+src/app/c/[slug]           classroom page (teacher tabs / student view)
+src/lib/grader.ts          grader repo creation + seeding (Contents API)
+src/lib/roles.ts           per-classroom role checks
+grader-template/           files committed into every {slug}-grader repo
+scripts/seed.ts            demo data
 ```

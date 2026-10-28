@@ -48,7 +48,7 @@ export const classrooms = pgTable(
     graderRepo: text("grader_repo").notNull(),
     createdAt: createdAt(),
   },
-  (t) => [unique("classrooms_installation_slug").on(t.installationId, t.slug)],
+  (t) => [unique("classrooms_slug").on(t.slug)], // global: pages are addressed as /c/:slug
 );
 
 export const classroomStaff = pgTable(

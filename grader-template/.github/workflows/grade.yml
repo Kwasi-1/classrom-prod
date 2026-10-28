@@ -1,0 +1,149 @@
+# Seeded by the Classroom app. Grades one submission per run.
+# Job "test" runs untrusted student code and has NO secrets.
+# Job "report" never runs student code; it only posts results back to the app.
+name: grade
+
+on:
+  repository_dispatch:
+    types: [grade]
+  workflow_dispatch:
+    inputs:
+      assignment:
+        description: Assignment slug (folder under assignments/)
+        required: true
+      repo:
+        description: Student repo as owner/name
+        required: true
+      sha:
+        description: Commit SHA to grade
+        required: true
+      token:
+        description: Optional short-lived token with read access to the student repo (masked)
+        required: false
+      submission_id:
+        description: Optional; if set, results are posted back to the app
+        required: false
+
+run-name: grade ${{ github.event.client_payload.repo || inputs.repo }}@${{ github.event.client_payload.sha || inputs.sha }}
+
+env:
+  APP_URL: __APP_URL__
+  ASSIGNMENT: ${{ github.event.client_payload.assignment || inputs.assignment }}
+  STUDENT_REPO: ${{ github.event.client_payload.repo || inputs.repo }}
+  SHA: ${{ github.event.client_payload.sha || inputs.sha }}
+  SUBMISSION_ID: ${{ github.event.client_payload.submission_id || inputs.submission_id }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Validate payload
+        env:
+          STUDENT_TOKEN: ${{ github.event.client_payload.token || inputs.token }}
+        run: |
+          if [ -n "$STUDENT_TOKEN" ]; then echo "::add-mask::$STUDENT_TOKEN"; fi
+          [[ "$ASSIGNMENT" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "bad assignment"; exit 1; }
+          [[ "$STUDENT_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "bad repo"; exit 1; }
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "bad sha"; exit 1; }
+
+      - name: Checkout grader
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout student submission
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.STUDENT_REPO }}
+          ref: ${{ env.SHA }}
+          token: ${{ github.event.client_payload.token || inputs.token || github.token }}
+          path: student
+          persist-credentials: false
+
+      - name: Prepare student tree
+        run: |
+          rm -rf student/.git
+          # Symlinks could redirect hidden-file copies outside the student tree.
+          find student -type l -delete
+          # Student conftest.py files could tamper with pytest collection.
+          find student -name conftest.py -type f -delete
+          # Remove student files that hidden test files will replace.
+          FILES="assignments/$ASSIGNMENT/files"
+          if [ -d "$FILES" ]; then
+            (cd "$FILES" && find . -type f -print0) | while IFS= read -r -d '' p; do
+              rm -rf "student/${p#./}"
+            done
+          fi
+
+      - name: Run tests
+        run: |
+          python3 grader/run_tests.py "assignments/$ASSIGNMENT/tests.yml" ./student results.json \
+            --files "assignments/$ASSIGNMENT/files"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results
+          path: results.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  report:
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: Download results
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: results
+          path: out
+
+      - name: Post results to the app
+        if: env.SUBMISSION_ID != ''
+        env:
+          GRADER_CALLBACK_SECRET: ${{ secrets.GRADER_CALLBACK_SECRET }}
+          TEST_JOB_RESULT: ${{ needs.test.result }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys, urllib.request
+
+          try:
+              with open("out/results.json", encoding="utf-8") as f:
+                  results = json.load(f)
+              if not isinstance(results, dict) or not isinstance(results.get("tests"), list):
+                  raise ValueError("malformed results.json")
+          except Exception as e:  # missing artifact => runner crashed or job was cancelled
+              results = {"tests": [], "error": f"grader did not produce results (test job: {os.environ['TEST_JOB_RESULT']}; {e})"}
+
+          body = json.dumps({
+              "submission_id": int(os.environ["SUBMISSION_ID"]),
+              "sha": os.environ["SHA"],
+              "results": results,
+          }).encode()
+          req = urllib.request.Request(
+              os.environ["APP_URL"].rstrip("/") + "/api/grader/callback",
+              data=body,
+              method="POST",
+              headers={
+                  "Content-Type": "application/json",
+                  "Authorization": "Bearer " + os.environ["GRADER_CALLBACK_SECRET"],
+              },
+          )
+          for attempt in range(3):
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as r:
+                      print("callback status", r.status)
+                      sys.exit(0)
+              except Exception as e:
+                  print("callback attempt", attempt + 1, "failed:", e)
+          sys.exit(1)
+          PY
