@@ -58,6 +58,7 @@ export function SubmissionsTable({
               <th>Latest SHA</th>
               <th>Received</th>
               <th>Score</th>
+              <th title="Latest submission received by the deadline">Final</th>
               <th>Late</th>
               <th>Status</th>
             </tr>
@@ -104,7 +105,22 @@ export function SubmissionsTable({
                       <span className="text-slate-400">—</span>
                     )}
                   </td>
-                  <td>{r.latest?.isLate ? <span className="text-amber-700">late</span> : ""}</td>
+                  <td className="font-medium">
+                    {r.final ? (
+                      r.final.score != null ? `${r.final.score}/${r.final.maxScore ?? "?"}` : <span className="text-slate-400">{r.final.status}</span>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
+                  <td>
+                    {r.lateAttempts > 0 ? (
+                      <span className="text-amber-700" title="Late submissions">
+                        {r.latest?.isLate ? "late" : ""} ({r.lateAttempts})
+                      </span>
+                    ) : (
+                      ""
+                    )}
+                  </td>
                   <td>
                     {r.latest ? (
                       <span className={`rounded-full px-2 py-0.5 text-xs ${STATUS_STYLE[r.latest.status]}`}>{r.latest.status}</span>

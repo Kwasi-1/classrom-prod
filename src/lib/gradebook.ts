@@ -1,10 +1,10 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lte, sql } from "drizzle-orm";
 import { db, t } from "@/db";
 
 export const FILTERS = ["all", "not-accepted", "not-submitted", "late"] as const;
 export type Filter = (typeof FILTERS)[number];
 
-export type LatestSubmission = {
+export type SubmissionSummary = {
   id: number;
   sha: string;
   receivedAt: Date;
@@ -21,26 +21,15 @@ export type GradebookRow = {
   repoName: string | null;
   acceptedAt: Date | null;
   lockedAt: Date | null;
-  latest: LatestSubmission | null;
+  latest: SubmissionSummary | null;
+  /** Final = latest submission with received_at <= deadline; null is shown as "—". */
+  final: SubmissionSummary | null;
+  lateAttempts: number;
 };
 
-/** One row per roster student for an assignment, with their latest submission (by received_at). */
-export async function gradebook(classroomId: number, assignmentId: number): Promise<GradebookRow[]> {
-  const students = await db
-    .select({
-      rosterId: t.roster.id,
-      login: t.roster.githubLogin,
-      studentRepoId: t.studentRepos.id,
-      repoName: t.studentRepos.repoName,
-      acceptedAt: t.studentRepos.acceptedAt,
-      lockedAt: t.studentRepos.lockedAt,
-    })
-    .from(t.roster)
-    .leftJoin(t.studentRepos, and(eq(t.studentRepos.rosterId, t.roster.id), eq(t.studentRepos.assignmentId, assignmentId)))
-    .where(eq(t.roster.classroomId, classroomId))
-    .orderBy(asc(t.roster.githubLogin));
-
-  const latest = await db
+/** Latest submission per student repo of an assignment, optionally only those received by `deadline`. */
+function latestPerRepo(assignmentId: number, deadline?: Date) {
+  return db
     .selectDistinctOn([t.submissions.studentRepoId], {
       studentRepoId: t.submissions.studentRepoId,
       id: t.submissions.id,
@@ -53,11 +42,51 @@ export async function gradebook(classroomId: number, assignmentId: number): Prom
     })
     .from(t.submissions)
     .innerJoin(t.studentRepos, eq(t.studentRepos.id, t.submissions.studentRepoId))
-    .where(eq(t.studentRepos.assignmentId, assignmentId))
+    .where(
+      deadline
+        ? and(eq(t.studentRepos.assignmentId, assignmentId), lte(t.submissions.receivedAt, deadline))
+        : eq(t.studentRepos.assignmentId, assignmentId),
+    )
     .orderBy(t.submissions.studentRepoId, desc(t.submissions.receivedAt), desc(t.submissions.id));
-  const byRepo = new Map(latest.map(({ studentRepoId, ...s }) => [studentRepoId, s]));
+}
 
-  return students.map((s) => ({ ...s, latest: s.studentRepoId ? (byRepo.get(s.studentRepoId) ?? null) : null }));
+function byRepo(rows: Awaited<ReturnType<typeof latestPerRepo>>) {
+  return new Map<number, SubmissionSummary>(rows.map(({ studentRepoId, ...s }) => [studentRepoId, s]));
+}
+
+/** One row per roster student for an assignment: latest submission, final submission, late attempts. */
+export async function gradebook(classroomId: number, assignmentId: number, deadline: Date): Promise<GradebookRow[]> {
+  const [students, latest, final, late] = await Promise.all([
+    db
+      .select({
+        rosterId: t.roster.id,
+        login: t.roster.githubLogin,
+        studentRepoId: t.studentRepos.id,
+        repoName: t.studentRepos.repoName,
+        acceptedAt: t.studentRepos.acceptedAt,
+        lockedAt: t.studentRepos.lockedAt,
+      })
+      .from(t.roster)
+      .leftJoin(t.studentRepos, and(eq(t.studentRepos.rosterId, t.roster.id), eq(t.studentRepos.assignmentId, assignmentId)))
+      .where(eq(t.roster.classroomId, classroomId))
+      .orderBy(asc(t.roster.githubLogin)),
+    latestPerRepo(assignmentId).then(byRepo),
+    latestPerRepo(assignmentId, deadline).then(byRepo),
+    db
+      .select({ studentRepoId: t.submissions.studentRepoId, n: sql<number>`count(*)::int` })
+      .from(t.submissions)
+      .innerJoin(t.studentRepos, eq(t.studentRepos.id, t.submissions.studentRepoId))
+      .where(and(eq(t.studentRepos.assignmentId, assignmentId), eq(t.submissions.isLate, true)))
+      .groupBy(t.submissions.studentRepoId)
+      .then((rows) => new Map(rows.map((r) => [r.studentRepoId, r.n]))),
+  ]);
+
+  return students.map((s) => ({
+    ...s,
+    latest: s.studentRepoId ? (latest.get(s.studentRepoId) ?? null) : null,
+    final: s.studentRepoId ? (final.get(s.studentRepoId) ?? null) : null,
+    lateAttempts: s.studentRepoId ? (late.get(s.studentRepoId) ?? 0) : 0,
+  }));
 }
 
 export function applyFilter(rows: GradebookRow[], filter: Filter) {
@@ -67,7 +96,7 @@ export function applyFilter(rows: GradebookRow[], filter: Filter) {
     case "not-submitted":
       return rows.filter((r) => !r.latest);
     case "late":
-      return rows.filter((r) => r.latest?.isLate);
+      return rows.filter((r) => r.lateAttempts > 0);
     default:
       return rows;
   }
@@ -88,4 +117,30 @@ export async function assignmentCounts(classroomId: number) {
     .where(eq(t.assignments.classroomId, classroomId))
     .groupBy(t.assignments.id);
   return new Map(rows.map((r) => [r.assignmentId, r]));
+}
+
+function csvCell(value: string | number | null | undefined) {
+  const s = value == null ? "" : String(value);
+  // Quote when needed; prefix formula-looking cells so spreadsheets don't evaluate them.
+  const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+  return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+/** CSV: github_login, repo, final_sha, final_score, max_score, submitted_at, late_attempts. */
+export function gradebookCsv(rows: GradebookRow[], org: string) {
+  const header = ["github_login", "repo", "final_sha", "final_score", "max_score", "submitted_at", "late_attempts"];
+  const lines = rows.map((r) =>
+    [
+      r.login,
+      r.repoName ? `${org}/${r.repoName}` : "",
+      r.final?.sha ?? "",
+      r.final?.score ?? "",
+      r.final?.maxScore ?? "",
+      r.final ? r.final.receivedAt.toISOString() : "",
+      r.lateAttempts,
+    ]
+      .map(csvCell)
+      .join(","),
+  );
+  return [header.join(","), ...lines].join("\r\n") + "\r\n";
 }

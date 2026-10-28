@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db, t } from "@/db";
 import { PostButton } from "@/components/ActionButtons";
 import { NewAssignmentForm } from "@/components/NewAssignmentForm";
@@ -50,11 +50,25 @@ export default async function ClassroomPage({
       .from(t.roster)
       .where(and(eq(t.roster.classroomId, classroom.id), eq(t.roster.githubLogin, user.githubLogin.toLowerCase())));
     const assignments = await db
-      .select({ a: t.assignments, repoName: t.studentRepos.repoName })
+      .select({ a: t.assignments, repoName: t.studentRepos.repoName, studentRepoId: t.studentRepos.id })
       .from(t.assignments)
       .leftJoin(t.studentRepos, and(eq(t.studentRepos.assignmentId, t.assignments.id), eq(t.studentRepos.rosterId, me.id)))
       .where(and(eq(t.assignments.classroomId, classroom.id), inArray(t.assignments.status, ["published", "closed"])))
       .orderBy(asc(t.assignments.deadline));
+    const repoIds = assignments.map((r) => r.studentRepoId).filter((id): id is number => id !== null);
+    const latest = repoIds.length
+      ? await db
+          .selectDistinctOn([t.submissions.studentRepoId], {
+            studentRepoId: t.submissions.studentRepoId,
+            status: t.submissions.status,
+            score: t.submissions.score,
+            maxScore: t.submissions.maxScore,
+          })
+          .from(t.submissions)
+          .where(inArray(t.submissions.studentRepoId, repoIds))
+          .orderBy(t.submissions.studentRepoId, desc(t.submissions.receivedAt), desc(t.submissions.id))
+      : [];
+    const latestByRepo = new Map(latest.map((l) => [l.studentRepoId, l]));
     return (
       <div>
         {header}
@@ -63,13 +77,29 @@ export default async function ClassroomPage({
           <p className="text-sm text-slate-500">No assignments have been published yet.</p>
         ) : (
           <ul className="space-y-2">
-            {assignments.map(({ a, repoName }) => (
+            {assignments.map(({ a, repoName, studentRepoId }) => {
+              const last = studentRepoId ? latestByRepo.get(studentRepoId) : undefined;
+              return (
               <li key={a.id} className="card flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <Link href={`/c/${classroom.slug}/a/${a.slug}`} className="font-medium hover:underline">
                     {a.title}
                   </Link>
-                  <div className="text-sm text-slate-500">Due {fmtTime(a.deadline)}</div>
+                  <div className="text-sm text-slate-500">
+                    Due {fmtTime(a.deadline)}
+                    {last && (
+                      <span className="ml-2">
+                        · Latest:{" "}
+                        {last.status === "graded" ? (
+                          <strong className="text-slate-900">
+                            {last.score}/{last.maxScore}
+                          </strong>
+                        ) : (
+                          last.status
+                        )}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 {repoName ? (
                   <a href={`https://github.com/${installation.orgLogin}/${repoName}`} className="font-mono text-sm text-blue-700 hover:underline">
@@ -83,7 +113,8 @@ export default async function ClassroomPage({
                   <span className="text-sm text-slate-400">Closed</span>
                 )}
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </div>

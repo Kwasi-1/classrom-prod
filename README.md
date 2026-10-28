@@ -6,7 +6,7 @@ GitHub **Free** organization, students submit by pushing, and every push is auto
 Stack: Next.js (App Router) + TypeScript, Neon Postgres via Drizzle ORM, a GitHub App (`@octokit/app`),
 `iron-session` cookies, Tailwind CSS. Deploys to Render.
 
-> Status: **Milestone 5** — through Milestone 4 plus autograding: dispatch to the grader repo, two-job workflow with Docker isolation, results callback, scores in the UI.
+> Status: **MVP complete (Milestones 1–6)** — distribution, push submissions, Docker-isolated autograding, deadline locking, reconcile, final scores and CSV export.
 
 ---
 
@@ -210,6 +210,55 @@ How it fits together:
   `max_points` over passed tests, and stores `graded` (or `error`).
 - If an assignment's autograding is paused, pushes are recorded as `queued` and not dispatched.
 
+## Manual test (Milestone 6)
+
+1. Create an assignment with a deadline **2 minutes ahead**, upload tests, publish, and accept it as the student.
+2. Push before the deadline → graded normally.
+3. After the deadline, trigger the lock job (on Render it runs every 5 minutes; locally call it yourself):
+   ```bash
+   curl -X POST -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/lock
+   ```
+   → the student's permission drops to **read** (also for a still-pending invitation), the repo shows *locked*
+   in the table and the assignment becomes **closed**.
+4. Push again as the student → rejected by GitHub (read-only). Even if a push slipped in between the deadline and the
+   lock, it is recorded as **late** and does not change the *Final* column.
+5. **Final** column = score of the latest submission received at or before the deadline ("—" if none).
+   The *Late* column counts late attempts.
+6. **Export CSV** → `github_login, repo, final_sha, final_score, max_score, submitted_at, late_attempts`
+   (`submitted_at` is UTC ISO-8601).
+7. **Pause autograding** → new pushes are recorded as `queued` but not graded. **Resume** dispatches each student's
+   latest queued submission. **Regrade all** re-runs every student's latest SHA; **Regrade latest** in a student's
+   detail panel re-runs one.
+8. Reconcile (nightly on Render):
+   ```bash
+   curl -X POST -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/reconcile
+   ```
+   For open assignments (and closed ones within 24h of the deadline), any default-branch head commit without a
+   submission is recorded (`received_at` = now, marked *via reconcile*) and graded. Test it by stopping smee, pushing,
+   then running reconcile.
+9. As the student: the classroom page lists each assignment with Accept / repo link, deadline and latest score; the
+   assignment page shows the latest submission with per-test ✅/❌ and points — never test output.
+
+## Deploy to Render
+
+[`render.yaml`](render.yaml) is a Blueprint for one **web service** (Starter, always-on) and two **cron jobs**.
+
+1. Push this repo to GitHub, then in Render: **New → Blueprint** → pick the repo. Render creates
+   `classroom`, `classroom-cron-lock` (every 5 min) and `classroom-cron-reconcile` (02:00 UTC daily).
+2. Set the environment variables marked *sync: false* in the dashboard:
+   - web service: everything from `.env.example` (`SESSION_SECRET` is generated). `APP_URL` = the service's
+     public URL, e.g. `https://classroom.onrender.com`.
+   - each cron job: `CRON_SECRET` (same value as the web service) and `APP_URL`.
+3. Deploys run `npm run db:migrate` as the pre-deploy command, so the Neon schema stays current.
+4. Point the **production** GitHub App at the deployed URL (Callback URL `APP_URL/api/auth/callback`,
+   Webhook URL `APP_URL/api/webhooks/github`).
+5. If classrooms were created while `APP_URL` was different, open each classroom's **Settings → Update grader
+   workflow** so grading results are posted to the new URL.
+
+Without the Blueprint: create a Node web service (build `npm ci && npm run build`, pre-deploy `npm run db:migrate`,
+start `npm start`) and two cron jobs whose command is
+`curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/cron/lock"` (and `.../reconcile`).
+
 ## Project layout
 
 ```
@@ -237,4 +286,7 @@ src/lib/submissions.ts     push webhook → submission rows
 src/lib/gradebook.ts       per-student latest submission, filters, per-assignment counts
 src/lib/grading.ts         dispatch to the grader repo; callback validation + scoring
 src/app/api/grader/callback  results from the grader's report job
+src/lib/deadlines.ts       lock + reconcile cron logic
+src/app/api/cron/*         cron endpoints (Bearer CRON_SECRET)
+render.yaml                Render Blueprint (web + 2 cron jobs)
 ```

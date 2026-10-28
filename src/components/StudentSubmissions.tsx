@@ -1,15 +1,18 @@
 import Link from "next/link";
 import { desc, eq } from "drizzle-orm";
 import { db, t } from "@/db";
+import { PostButton } from "./ActionButtons";
 import { fmtTime } from "@/lib/time";
 
 /** Teacher-only: every submission for one student repo, newest first, with per-test output. */
 export async function StudentSubmissions({
+  assignmentId,
   studentRepoId,
   login,
   repoUrl,
   closeHref,
 }: {
+  assignmentId: number;
   studentRepoId: number;
   login: string;
   repoUrl: string;
@@ -27,9 +30,20 @@ export async function StudentSubmissions({
         <h3 className="font-medium">
           Submissions by <span className="font-mono">{login}</span> ({subs.length})
         </h3>
-        <Link href={closeHref} className="text-sm text-slate-500 hover:underline">
-          Close
-        </Link>
+        <div className="flex items-center gap-3">
+          {subs.length > 0 && (
+            <PostButton
+              url={`/api/assignments/${assignmentId}/regrade`}
+              body={{ student_repo_id: studentRepoId }}
+              label="Regrade latest"
+              busyLabel="Dispatching…"
+              done="Regrading started"
+            />
+          )}
+          <Link href={closeHref} className="text-sm text-slate-500 hover:underline">
+            Close
+          </Link>
+        </div>
       </div>
       {subs.length === 0 && <p className="text-sm text-slate-500">No submissions yet.</p>}
       {subs.map((s) => (

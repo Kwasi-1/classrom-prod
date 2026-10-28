@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db, t } from "@/db";
-import { CopyField, PublishButton } from "@/components/ActionButtons";
+import { CopyField, PostButton, PublishButton } from "@/components/ActionButtons";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { StudentSubmissions } from "@/components/StudentSubmissions";
 import { SubmissionsTable } from "@/components/SubmissionsTable";
@@ -60,29 +60,44 @@ export default async function AssignmentPage({
 
   if (role === "student") {
     const [mine] = await db
-      .select({ repoName: t.studentRepos.repoName, acceptedAt: t.studentRepos.acceptedAt })
+      .select({ id: t.studentRepos.id, repoName: t.studentRepos.repoName, lockedAt: t.studentRepos.lockedAt })
       .from(t.studentRepos)
       .innerJoin(t.roster, eq(t.roster.id, t.studentRepos.rosterId))
       .where(and(eq(t.studentRepos.assignmentId, assignment.id), eq(t.roster.githubLogin, user.githubLogin.toLowerCase())));
+    const [latest] = mine
+      ? await db
+          .select()
+          .from(t.submissions)
+          .where(eq(t.submissions.studentRepoId, mine.id))
+          .orderBy(desc(t.submissions.receivedAt), desc(t.submissions.id))
+          .limit(1)
+      : [];
     return (
-      <div>
+      <div className="space-y-4">
         {header}
-        <div className="card">
+        <div className="card space-y-2 text-sm">
           {mine ? (
-            <p className="text-sm">
-              Your repository:{" "}
-              <a href={`https://github.com/${org}/${mine.repoName}`} className="font-mono text-blue-700 hover:underline">
-                {org}/{mine.repoName}
-              </a>
-            </p>
-          ) : assignment.status === "published" && assignment.inviteCode ? (
+            <>
+              <p>
+                Your repository:{" "}
+                <a href={`https://github.com/${org}/${mine.repoName}`} className="font-mono text-blue-700 hover:underline">
+                  {org}/{mine.repoName}
+                </a>
+                {mine.lockedAt && <span className="ml-2 text-amber-700">(read-only since the deadline)</span>}
+              </p>
+              <p className="text-slate-600">Push to the default branch to submit. Every push is graded automatically.</p>
+            </>
+          ) : assignment.status === "published" && assignment.inviteCode && assignment.deadline.getTime() > Date.now() ? (
             <Link href={`/a/${assignment.inviteCode}`} className="btn">
               Accept assignment
             </Link>
           ) : (
-            <p className="text-sm text-slate-500">This assignment is not open for acceptance.</p>
+            <p className="text-slate-500">This assignment is not open for acceptance.</p>
           )}
         </div>
+        {mine && latest && <StudentResult submission={latest} repoUrl={`https://github.com/${org}/${mine.repoName}`} />}
+        {mine && !latest && <p className="text-sm text-slate-500">No submissions yet.</p>}
+        {mine && <AutoRefresh seconds={15} />}
       </div>
     );
   }
@@ -115,10 +130,32 @@ export default async function AssignmentPage({
             <PublishButton assignmentId={assignment.id} />
           </div>
         )}
-        {assignment.inviteCode && assignment.status !== "draft" && (
+        {assignment.inviteCode && assignment.status === "published" && (
           <div>
             <label className="label">Invite link (share with students)</label>
             <CopyField value={inviteUrl(assignment.inviteCode)} />
+          </div>
+        )}
+        {assignment.status !== "draft" && (
+          <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3">
+            {assignment.autogradePaused ? (
+              <>
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Autograding paused</span>
+                <PostButton url={`/api/assignments/${assignment.id}/resume`} label="Resume autograding" busyLabel="Resuming…" done="Resumed" />
+              </>
+            ) : (
+              <PostButton url={`/api/assignments/${assignment.id}/pause`} label="Pause autograding" busyLabel="Pausing…" done="Paused" />
+            )}
+            <PostButton
+              url={`/api/assignments/${assignment.id}/regrade`}
+              label="Regrade all"
+              busyLabel="Dispatching…"
+              done="Regrading started"
+              confirm="Re-run grading for the latest submission of every student?"
+            />
+            <a href={`/api/assignments/${assignment.id}/export.csv`} className="btn-secondary">
+              Export CSV
+            </a>
           </div>
         )}
       </div>
@@ -141,6 +178,7 @@ export default async function AssignmentPage({
         <SubmissionsTab
           classroomId={classroom.id}
           assignmentId={assignment.id}
+          deadline={assignment.deadline}
           org={org}
           filter={filter}
           student={sp.student}
@@ -176,13 +214,14 @@ async function TestsTab(props: { assignmentId: number; dir: string; org: string;
 async function SubmissionsTab(props: {
   classroomId: number;
   assignmentId: number;
+  deadline: Date;
   org: string;
   filter: Filter;
   student?: string;
   base: string;
 }) {
-  const { classroomId, assignmentId, org, filter, student, base } = props;
-  const rows = await gradebook(classroomId, assignmentId);
+  const { classroomId, assignmentId, deadline, org, filter, student, base } = props;
+  const rows = await gradebook(classroomId, assignmentId, deadline);
   const selected = student ? rows.find((r) => r.login === student.toLowerCase() && r.studentRepoId) : undefined;
   const listHref = filter === "all" ? base : `${base}&filter=${filter}`;
   return (
@@ -190,6 +229,7 @@ async function SubmissionsTab(props: {
       <AutoRefresh seconds={10} />
       {selected?.studentRepoId && (
         <StudentSubmissions
+          assignmentId={assignmentId}
           studentRepoId={selected.studentRepoId}
           login={selected.login}
           repoUrl={`https://github.com/${org}/${selected.repoName}`}
@@ -198,5 +238,49 @@ async function SubmissionsTab(props: {
       )}
       <SubmissionsTable rows={rows} org={org} filter={filter} baseHref={base} />
     </>
+  );
+}
+
+type Submission = typeof t.submissions.$inferSelect;
+
+/** Student-facing result: test names and pass/fail only. No output, so hidden test details never leak. */
+function StudentResult({ submission, repoUrl }: { submission: Submission; repoUrl: string }) {
+  const tests = submission.results?.tests ?? [];
+  return (
+    <div className="card space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="font-medium">Latest submission</h3>
+        <div className="text-sm text-slate-600">
+          <a href={`${repoUrl}/commit/${submission.sha}`} className="font-mono text-blue-700 hover:underline">
+            {submission.sha.slice(0, 7)}
+          </a>{" "}
+          · {fmtTime(submission.receivedAt)}
+          {submission.isLate && <span className="ml-1 text-amber-700">· late</span>}
+        </div>
+      </div>
+      {submission.status === "graded" ? (
+        <p className="text-2xl font-bold">
+          {submission.score}/{submission.maxScore}
+        </p>
+      ) : submission.status === "error" ? (
+        <p className="text-sm text-red-700">Grading failed for this commit. Your teacher can see the details.</p>
+      ) : (
+        <p className="text-sm text-slate-600">Grading in progress…</p>
+      )}
+      {tests.length > 0 && (
+        <ul className="divide-y divide-slate-100 text-sm">
+          {tests.map((test) => (
+            <li key={test.name} className="flex items-center justify-between py-1.5">
+              <span>
+                {test.passed ? "✅" : "❌"} {test.name}
+              </span>
+              <span className="tabular-nums text-slate-500">
+                {test.points}/{test.max_points}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

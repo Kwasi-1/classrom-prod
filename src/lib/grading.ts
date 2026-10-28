@@ -63,6 +63,8 @@ export async function dispatchGrading(submissionId: number) {
   } catch (err) {
     const message = `dispatch failed: ${safeError(err)}`;
     console.error(`[grading] submission ${submission.id}: ${message}`);
+    // A failed regrade must not wipe a score the student already has.
+    if (submission.status === "graded") return;
     await db
       .update(t.submissions)
       .set({ status: "error", results: { source, tests: [], error: message } })

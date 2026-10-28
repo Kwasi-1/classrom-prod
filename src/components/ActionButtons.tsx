@@ -78,7 +78,21 @@ export function AcceptButton({ inviteCode }: { inviteCode: string }) {
 }
 
 /** POSTs to `url` and refreshes; shows the server's error message on failure. */
-export function PostButton({ url, label, busyLabel, done }: { url: string; label: string; busyLabel: string; done?: string }) {
+export function PostButton({
+  url,
+  label,
+  busyLabel,
+  done,
+  body,
+  confirm,
+}: {
+  url: string;
+  label: string;
+  busyLabel: string;
+  done?: string;
+  body?: unknown;
+  confirm?: string;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
@@ -89,12 +103,16 @@ export function PostButton({ url, label, busyLabel, done }: { url: string; label
         className="btn-secondary"
         disabled={busy}
         onClick={async () => {
+          if (confirm && !window.confirm(confirm)) return;
           setBusy(true);
           setMessage(null);
-          const res = await fetch(url, { method: "POST" });
-          const body = await res.json().catch(() => ({}));
+          const res = await fetch(url, {
+            method: "POST",
+            ...(body === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+          });
+          const json = await res.json().catch(() => ({}));
           setBusy(false);
-          setMessage(res.ok ? { ok: true, text: done ?? "Done" } : { ok: false, text: body.error ?? "Failed" });
+          setMessage(res.ok ? { ok: true, text: done ?? "Done" } : { ok: false, text: json.error ?? "Failed" });
           if (res.ok) router.refresh();
         }}
       >
