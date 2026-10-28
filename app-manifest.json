@@ -1,0 +1,23 @@
+{
+  "name": "Classroom Autograder",
+  "url": "https://YOUR_APP_URL",
+  "description": "Distributes coding assignments as private repos and autogrades every push.",
+  "public": false,
+  "hook_attributes": {
+    "url": "https://YOUR_APP_URL/api/webhooks/github",
+    "active": true
+  },
+  "redirect_url": "https://YOUR_APP_URL/api/auth/callback",
+  "callback_urls": ["https://YOUR_APP_URL/api/auth/callback"],
+  "request_oauth_on_install": true,
+  "setup_on_update": false,
+  "default_permissions": {
+    "administration": "write",
+    "contents": "write",
+    "workflows": "write",
+    "actions": "write",
+    "metadata": "read",
+    "members": "read"
+  },
+  "default_events": ["push", "installation", "installation_repositories"]
+}
