@@ -1,4 +1,5 @@
 import { storeInstallation } from "./installations";
+import { handlePush, type PushPayload } from "./submissions";
 
 type InstallationPayload = { action: string; installation: { id: number } };
 
@@ -19,7 +20,7 @@ export async function handleWebhook(event: string, payload: unknown) {
       // Repo selection changed; we look repos up on demand, so nothing to sync.
       return;
     case "push":
-      // Handled in milestone 4 (submissions).
+      await handlePush(payload as PushPayload);
       return;
     default:
       return;

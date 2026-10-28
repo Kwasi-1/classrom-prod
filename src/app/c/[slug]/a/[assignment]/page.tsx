@@ -1,11 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, asc, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, t } from "@/db";
 import { CopyField, PublishButton } from "@/components/ActionButtons";
+import { AutoRefresh } from "@/components/AutoRefresh";
+import { SubmissionsTable } from "@/components/SubmissionsTable";
 import { TestsUpload } from "@/components/TestsUpload";
 import { inviteUrl, loadAssignmentBySlugs, testsDir } from "@/lib/assignments";
 import { installationOctokit } from "@/lib/github";
+import { FILTERS, gradebook, type Filter } from "@/lib/gradebook";
 import { listFiles, readFileText } from "@/lib/grader";
 import { safeError } from "@/lib/log";
 import { classroomRole } from "@/lib/roles";
@@ -20,8 +23,17 @@ const STATUS_STYLE = {
   closed: "bg-amber-100 text-amber-800",
 } as const;
 
-export default async function AssignmentPage({ params }: { params: Promise<{ slug: string; assignment: string }> }) {
+export default async function AssignmentPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ slug: string; assignment: string }>;
+  searchParams: Promise<{ filter?: string; tab?: string }>;
+}) {
   const { slug, assignment: assignmentSlug } = await params;
+  const sp = await searchParams;
+  const filterParam = sp.filter as Filter;
+  const filter: Filter = FILTERS.includes(filterParam) ? filterParam : "all";
   const user = await requireUser(`/c/${slug}/a/${assignmentSlug}`);
   const row = await loadAssignmentBySlugs(slug, assignmentSlug);
   if (!row) notFound();
@@ -74,27 +86,10 @@ export default async function AssignmentPage({ params }: { params: Promise<{ slu
     );
   }
 
-  // Teacher view: tests live in the grader repo, so read them from GitHub.
+  // Teacher view. Submissions come from the DB (auto-refreshed); tests are read from GitHub only on their tab.
+  const tab = sp.tab === "tests" || (sp.tab !== "submissions" && assignment.status === "draft") ? "tests" : "submissions";
+  const base = `/c/${classroom.slug}/a/${assignment.slug}`;
   const dir = testsDir(assignment.slug);
-  let testsYaml = "";
-  let hiddenFiles: string[] = [];
-  let ghError: string | null = null;
-  try {
-    const gh = await installationOctokit(installation.githubInstallationId);
-    [testsYaml, hiddenFiles] = await Promise.all([
-      readFileText(gh, org, classroom.graderRepo, `${dir}/tests.yml`).then((s) => s ?? ""),
-      listFiles(gh, org, classroom.graderRepo, `${dir}/files`).then((paths) => paths.map((p) => p.slice(`${dir}/files/`.length))),
-    ]);
-  } catch (err) {
-    ghError = safeError(err);
-  }
-
-  const accepted = await db
-    .select({ login: t.roster.githubLogin, repoName: t.studentRepos.repoName, acceptedAt: t.studentRepos.acceptedAt })
-    .from(t.studentRepos)
-    .innerJoin(t.roster, eq(t.roster.id, t.studentRepos.rosterId))
-    .where(eq(t.studentRepos.assignmentId, assignment.id))
-    .orderBy(asc(t.roster.githubLogin));
 
   return (
     <div className="space-y-6">
@@ -127,41 +122,48 @@ export default async function AssignmentPage({ params }: { params: Promise<{ slu
         )}
       </div>
 
-      {ghError ? (
-        <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">Could not read the grader repo: {ghError}</p>
-      ) : (
-        <TestsUpload assignmentId={assignment.id} initialYaml={testsYaml} existingFiles={hiddenFiles} />
-      )}
+      <nav className="flex gap-1 border-b border-slate-200">
+        {(["submissions", "tests"] as const).map((name) => (
+          <Link
+            key={name}
+            href={`${base}?tab=${name}`}
+            className={`-mb-px border-b-2 px-4 py-2 text-sm capitalize ${
+              tab === name ? "border-slate-900 font-medium" : "border-transparent text-slate-500 hover:text-slate-900"
+            }`}
+          >
+            {name}
+          </Link>
+        ))}
+      </nav>
 
-      <div className="card">
-        <h3 className="mb-3 font-medium">Accepted ({accepted.length})</h3>
-        {accepted.length === 0 ? (
-          <p className="text-sm text-slate-500">No students have accepted yet.</p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="text-left text-slate-500">
-              <tr>
-                <th className="py-1">Student</th>
-                <th>Repository</th>
-                <th>Accepted</th>
-              </tr>
-            </thead>
-            <tbody>
-              {accepted.map((a) => (
-                <tr key={a.login} className="border-t border-slate-100">
-                  <td className="py-1.5 font-mono">{a.login}</td>
-                  <td>
-                    <a href={`https://github.com/${org}/${a.repoName}`} className="font-mono text-blue-700 hover:underline">
-                      {a.repoName}
-                    </a>
-                  </td>
-                  <td>{fmtTime(a.acceptedAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {tab === "submissions" ? (
+        <>
+          <AutoRefresh seconds={10} />
+          <SubmissionsTable rows={await gradebook(classroom.id, assignment.id)} org={org} filter={filter} baseHref={`${base}?tab=submissions`} />
+        </>
+      ) : (
+        <TestsTab
+          assignmentId={assignment.id}
+          dir={dir}
+          org={org}
+          graderRepo={classroom.graderRepo}
+          installationId={installation.githubInstallationId}
+        />
+      )}
     </div>
   );
+}
+
+async function TestsTab(props: { assignmentId: number; dir: string; org: string; graderRepo: string; installationId: number }) {
+  const { assignmentId, dir, org, graderRepo, installationId } = props;
+  try {
+    const gh = await installationOctokit(installationId);
+    const [testsYaml, hiddenFiles] = await Promise.all([
+      readFileText(gh, org, graderRepo, `${dir}/tests.yml`).then((s) => s ?? ""),
+      listFiles(gh, org, graderRepo, `${dir}/files`).then((paths) => paths.map((p) => p.slice(`${dir}/files/`.length))),
+    ]);
+    return <TestsUpload assignmentId={assignmentId} initialYaml={testsYaml} existingFiles={hiddenFiles} />;
+  } catch (err) {
+    return <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">Could not read the grader repo: {safeError(err)}</p>;
+  }
 }

@@ -5,6 +5,7 @@ import { db, t } from "@/db";
 import { NewAssignmentForm } from "@/components/NewAssignmentForm";
 import { RosterImport } from "@/components/RosterImport";
 import { listTemplateRepos } from "@/lib/assignments";
+import { assignmentCounts } from "@/lib/gradebook";
 import { installationOctokit } from "@/lib/github";
 import { safeError } from "@/lib/log";
 import { classroomRole, loadClassroom, type Classroom } from "@/lib/roles";
@@ -131,6 +132,7 @@ async function AssignmentsTab({
     .from(t.assignments)
     .where(eq(t.assignments.classroomId, classroom.id))
     .orderBy(asc(t.assignments.deadline));
+  const counts = await assignmentCounts(classroom.id);
 
   let newForm: React.ReactNode = null;
   if (showNew) {
@@ -167,6 +169,9 @@ async function AssignmentsTab({
               <th className="py-2">Title</th>
               <th>Status</th>
               <th>Deadline</th>
+              <th className="text-right">Accepted</th>
+              <th className="text-right">Submitted</th>
+              <th className="text-right">Graded</th>
             </tr>
           </thead>
           <tbody>
@@ -180,6 +185,9 @@ async function AssignmentsTab({
                 </td>
                 <td>{a.status}</td>
                 <td>{fmtTime(a.deadline)}</td>
+                <td className="text-right tabular-nums">{counts.get(a.id)?.accepted ?? 0}</td>
+                <td className="text-right tabular-nums">{counts.get(a.id)?.submitted ?? 0}</td>
+                <td className="text-right tabular-nums">{counts.get(a.id)?.graded ?? 0}</td>
               </tr>
             ))}
           </tbody>

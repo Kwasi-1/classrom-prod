@@ -6,7 +6,7 @@ GitHub **Free** organization, students submit by pushing, and every push is auto
 Stack: Next.js (App Router) + TypeScript, Neon Postgres via Drizzle ORM, a GitHub App (`@octokit/app`),
 `iron-session` cookies, Tailwind CSS. Deploys to Render.
 
-> Status: **Milestone 3** — login, app install, webhooks, classrooms, roster, assignments (tests upload, publish, invite links) and the accept flow.
+> Status: **Milestone 4** — through Milestone 3 plus push webhooks → submissions and the teacher submissions table.
 
 ---
 
@@ -156,6 +156,23 @@ Steps:
 5. Open the invite link again → it shows the same repo (accepting is idempotent).
 6. Error cases: a user not on the roster, a draft/closed assignment, or a passed deadline each show a clear message.
 
+## Manual test (Milestone 4)
+
+Webhooks must reach the app: locally, keep `smee-client` running (README §4).
+
+1. As the student, accept the invitation from Milestone 3, clone the repo, commit a change and push to `main`.
+2. Within seconds the assignment's **Submissions** tab (auto-refreshes every 10s) shows the student's row with the
+   short SHA (linked to the commit), received time (Africa/Accra), *late* flag and status `queued`
+   (grading is wired up in Milestone 5).
+3. Push again → the row shows the newer SHA. Push to another branch → nothing changes.
+4. Redeliver the push from the app's *Advanced → Recent deliveries* → no duplicate submission.
+5. Filters: *All / Not accepted / Not submitted / Late*. The classroom's Assignments tab shows
+   accepted / submitted / graded counts per assignment.
+
+Rules: only pushes to the repo's default branch count; pushes by the app itself (e.g. the template's
+initial commit), branch deletions and pushes to locked repos are ignored. `received_at` is the server's
+time when the webhook arrived — commit timestamps are never used — and `is_late = received_at > deadline`.
+
 ## Project layout
 
 ```
@@ -179,4 +196,6 @@ src/lib/accept.ts          accept flow: template generate → collaborator invit
 src/app/a/[inviteCode]     accept page
 src/app/c/[slug]/a/[assignment]  assignment page (teacher: tests, publish; student: repo)
 examples/                  hello-python template + matching tests
+src/lib/submissions.ts     push webhook → submission rows
+src/lib/gradebook.ts       per-student latest submission, filters, per-assignment counts
 ```
