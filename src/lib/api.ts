@@ -22,6 +22,10 @@ export function handler<A extends unknown[]>(fn: (...args: A) => Promise<Respons
         return NextResponse.json({ error: err.message, details: err.details }, { status: err.status });
       }
       console.error(`[api] ${safeError(err)}`);
+      // Octokit RequestErrors carry the HTTP status; surface GitHub's message so teachers can act on it.
+      if (err && typeof err === "object" && "status" in err && "request" in err) {
+        return NextResponse.json({ error: `GitHub API error: ${safeError(err)}` }, { status: 502 });
+      }
       return NextResponse.json({ error: "Internal error" }, { status: 500 });
     }
   };

@@ -1,0 +1,23 @@
+image: python:3.12-slim
+setup: pip install -q -r requirements.txt   # runs once, with network, before hidden files are added
+tests:
+  - name: adds two numbers
+    type: io
+    run: python main.py
+    input: "2 3"
+    expected: "5"
+    match: exact
+    points: 10
+    timeout: 5
+  - name: adds negative numbers
+    type: io
+    run: python main.py
+    input: "-4 1"
+    expected: "-3"
+    points: 10
+    timeout: 5
+  - name: unit tests
+    type: command
+    run: python -m pytest tests/ -q
+    points: 30
+    timeout: 30

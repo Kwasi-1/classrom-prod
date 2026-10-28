@@ -6,7 +6,7 @@ GitHub **Free** organization, students submit by pushing, and every push is auto
 Stack: Next.js (App Router) + TypeScript, Neon Postgres via Drizzle ORM, a GitHub App (`@octokit/app`),
 `iron-session` cookies, Tailwind CSS. Deploys to Render.
 
-> Status: **Milestone 2** — login, app install, webhooks, classrooms (with grader repo seeding) and roster import.
+> Status: **Milestone 3** — login, app install, webhooks, classrooms, roster, assignments (tests upload, publish, invite links) and the accept flow.
 
 ---
 
@@ -134,6 +134,28 @@ npm run db:seed -- your-github-login
 This creates classroom `/c/demo101` (org `demo-org`) owned by you, with 8 fake students.
 GitHub-backed actions (roster validation, grader repo links) won't work against this demo data.
 
+## Manual test (Milestone 3)
+
+Setup (once):
+1. Create a repo in your org from [`examples/hello-python`](examples/hello-python) and tick
+   **Settings → Template repository**. If the app is installed on *selected* repositories only, add it.
+2. Have a second GitHub account (the "student") and add its username to the classroom roster.
+
+Steps:
+1. Classroom → **Assignments → New assignment**: title, slug (e.g. `hw1`), template `hello-python`,
+   deadline (entered in Africa/Accra time). It is created as a **draft**.
+2. On the assignment page, paste [`examples/hello-python-tests/tests.yml`](examples/hello-python-tests/tests.yml),
+   click **Choose folder** and pick `examples/hello-python-tests/files`, then **Validate & save**.
+   - Try an invalid file first (e.g. remove an `expected:`) — errors appear inline and nothing is committed.
+   - On success, the grader repo gets one commit with `assignments/hw1/tests.yml`, `tests.json` and
+     `files/tests/test_main.py`.
+3. **Publish** → the invite link `APP_URL/a/{code}` appears. (Publishing requires tests to be uploaded.)
+4. As the student, open the invite link → sign in → **Accept assignment**. Within ~10s a private repo
+   `{classroom}-hw1-{login}` appears in the org (created from the template) and the student is invited
+   as a collaborator with *push* access. The page links to the invitation, which the student must accept.
+5. Open the invite link again → it shows the same repo (accepting is idempotent).
+6. Error cases: a user not on the roster, a draft/closed assignment, or a passed deadline each show a clear message.
+
 ## Project layout
 
 ```
@@ -152,4 +174,9 @@ src/lib/grader.ts          grader repo creation + seeding (Contents API)
 src/lib/roles.ts           per-classroom role checks
 grader-template/           files committed into every {slug}-grader repo
 scripts/seed.ts            demo data
+src/lib/tests-spec.ts      tests.yml Zod schema (mirrors run_tests.py)
+src/lib/accept.ts          accept flow: template generate → collaborator invite
+src/app/a/[inviteCode]     accept page
+src/app/c/[slug]/a/[assignment]  assignment page (teacher: tests, publish; student: repo)
+examples/                  hello-python template + matching tests
 ```

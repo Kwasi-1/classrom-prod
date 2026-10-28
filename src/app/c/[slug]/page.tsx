@@ -1,9 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db, t } from "@/db";
+import { NewAssignmentForm } from "@/components/NewAssignmentForm";
 import { RosterImport } from "@/components/RosterImport";
-import { classroomRole, loadClassroom } from "@/lib/roles";
+import { listTemplateRepos } from "@/lib/assignments";
+import { installationOctokit } from "@/lib/github";
+import { safeError } from "@/lib/log";
+import { classroomRole, loadClassroom, type Classroom } from "@/lib/roles";
+import { COMBINED_SLUG_MAX } from "@/lib/slug";
 import { requireUser } from "@/lib/session";
 import { fmtTime } from "@/lib/time";
 
@@ -17,7 +22,7 @@ export default async function ClassroomPage({
   searchParams,
 }: {
   params: Promise<{ slug: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; new?: string }>;
 }) {
   const { slug } = await params;
   const user = await requireUser(`/c/${slug}`);
@@ -37,10 +42,15 @@ export default async function ClassroomPage({
   );
 
   if (role === "student") {
+    const [me] = await db
+      .select({ id: t.roster.id })
+      .from(t.roster)
+      .where(and(eq(t.roster.classroomId, classroom.id), eq(t.roster.githubLogin, user.githubLogin.toLowerCase())));
     const assignments = await db
-      .select()
+      .select({ a: t.assignments, repoName: t.studentRepos.repoName })
       .from(t.assignments)
-      .where(and(eq(t.assignments.classroomId, classroom.id), eq(t.assignments.status, "published")))
+      .leftJoin(t.studentRepos, and(eq(t.studentRepos.assignmentId, t.assignments.id), eq(t.studentRepos.rosterId, me.id)))
+      .where(and(eq(t.assignments.classroomId, classroom.id), inArray(t.assignments.status, ["published", "closed"])))
       .orderBy(asc(t.assignments.deadline));
     return (
       <div>
@@ -50,10 +60,25 @@ export default async function ClassroomPage({
           <p className="text-sm text-slate-500">No assignments have been published yet.</p>
         ) : (
           <ul className="space-y-2">
-            {assignments.map((a) => (
-              <li key={a.id} className="card flex items-center justify-between">
-                <span className="font-medium">{a.title}</span>
-                <span className="text-sm text-slate-500">Due {fmtTime(a.deadline)}</span>
+            {assignments.map(({ a, repoName }) => (
+              <li key={a.id} className="card flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <Link href={`/c/${classroom.slug}/a/${a.slug}`} className="font-medium hover:underline">
+                    {a.title}
+                  </Link>
+                  <div className="text-sm text-slate-500">Due {fmtTime(a.deadline)}</div>
+                </div>
+                {repoName ? (
+                  <a href={`https://github.com/${installation.orgLogin}/${repoName}`} className="font-mono text-sm text-blue-700 hover:underline">
+                    {repoName}
+                  </a>
+                ) : a.status === "published" && a.inviteCode && a.deadline.getTime() > Date.now() ? (
+                  <Link href={`/a/${a.inviteCode}`} className="btn">
+                    Accept
+                  </Link>
+                ) : (
+                  <span className="text-sm text-slate-400">Closed</span>
+                )}
               </li>
             ))}
           </ul>
@@ -62,7 +87,8 @@ export default async function ClassroomPage({
     );
   }
 
-  const tab: Tab = TABS.includes((await searchParams).tab as Tab) ? ((await searchParams).tab as Tab) : "assignments";
+  const sp = await searchParams;
+  const tab: Tab = TABS.includes(sp.tab as Tab) ? (sp.tab as Tab) : "assignments";
 
   return (
     <div>
@@ -80,39 +106,86 @@ export default async function ClassroomPage({
           </Link>
         ))}
       </nav>
-      {tab === "assignments" && <AssignmentsTab classroomId={classroom.id} />}
+      {tab === "assignments" && (
+        <AssignmentsTab classroom={classroom} org={installation.orgLogin} installationId={installation.githubInstallationId} showNew={sp.new === "1"} />
+      )}
       {tab === "roster" && <RosterTab classroomId={classroom.id} />}
       {tab === "settings" && <SettingsTab org={installation.orgLogin} graderRepo={classroom.graderRepo} />}
     </div>
   );
 }
 
-async function AssignmentsTab({ classroomId }: { classroomId: number }) {
+async function AssignmentsTab({
+  classroom,
+  org,
+  installationId,
+  showNew,
+}: {
+  classroom: Classroom;
+  org: string;
+  installationId: number;
+  showNew: boolean;
+}) {
   const assignments = await db
     .select()
     .from(t.assignments)
-    .where(eq(t.assignments.classroomId, classroomId))
+    .where(eq(t.assignments.classroomId, classroom.id))
     .orderBy(asc(t.assignments.deadline));
-  if (assignments.length === 0) return <p className="text-sm text-slate-500">No assignments yet.</p>;
+
+  let newForm: React.ReactNode = null;
+  if (showNew) {
+    try {
+      const templates = await listTemplateRepos(await installationOctokit(installationId), org);
+      newForm = (
+        <NewAssignmentForm
+          classroomId={classroom.id}
+          classroomSlug={classroom.slug}
+          templates={templates}
+          maxSlug={COMBINED_SLUG_MAX - classroom.slug.length}
+        />
+      );
+    } catch (err) {
+      newForm = <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">Could not list template repos: {safeError(err)}</p>;
+    }
+  }
+
   return (
-    <table className="w-full text-sm">
-      <thead className="text-left text-slate-500">
-        <tr>
-          <th className="py-2">Title</th>
-          <th>Status</th>
-          <th>Deadline</th>
-        </tr>
-      </thead>
-      <tbody>
-        {assignments.map((a) => (
-          <tr key={a.id} className="border-t border-slate-200">
-            <td className="py-2 font-medium">{a.title}</td>
-            <td>{a.status}</td>
-            <td>{fmtTime(a.deadline)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="space-y-4">
+      {showNew ? (
+        newForm
+      ) : (
+        <Link href={`/c/${classroom.slug}?tab=assignments&new=1`} className="btn">
+          New assignment
+        </Link>
+      )}
+      {assignments.length === 0 ? (
+        <p className="text-sm text-slate-500">No assignments yet.</p>
+      ) : (
+        <table className="w-full text-sm">
+          <thead className="text-left text-slate-500">
+            <tr>
+              <th className="py-2">Title</th>
+              <th>Status</th>
+              <th>Deadline</th>
+            </tr>
+          </thead>
+          <tbody>
+            {assignments.map((a) => (
+              <tr key={a.id} className="border-t border-slate-200">
+                <td className="py-2">
+                  <Link href={`/c/${classroom.slug}/a/${a.slug}`} className="font-medium hover:underline">
+                    {a.title}
+                  </Link>{" "}
+                  <span className="font-mono text-xs text-slate-400">{a.slug}</span>
+                </td>
+                <td>{a.status}</td>
+                <td>{fmtTime(a.deadline)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 

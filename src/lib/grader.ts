@@ -86,3 +86,73 @@ export async function seedGraderRepo(gh: Gh, org: string, classroomSlug: string,
   }
   return name;
 }
+
+export type FileChange = { path: string; content: string | Buffer } | { path: string; delete: true };
+
+/**
+ * Commits many file additions/deletions as a single commit on the default branch (Git Data API),
+ * so a tests upload is atomic: the grader never sees a half-updated assignment.
+ */
+export async function commitFiles(gh: Gh, owner: string, repo: string, changes: FileChange[], message: string) {
+  const { data: repoData } = await gh.request("GET /repos/{owner}/{repo}", { owner, repo });
+  const branch = repoData.default_branch;
+  const { data: ref } = await gh.request("GET /repos/{owner}/{repo}/git/ref/{ref}", { owner, repo, ref: `heads/${branch}` });
+  const { data: head } = await gh.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+    owner,
+    repo,
+    commit_sha: ref.object.sha,
+  });
+
+  const tree = [];
+  for (const change of changes) {
+    if ("delete" in change) {
+      tree.push({ path: change.path, mode: "100644" as const, type: "blob" as const, sha: null });
+    } else {
+      const { data: blob } = await gh.request("POST /repos/{owner}/{repo}/git/blobs", {
+        owner,
+        repo,
+        content: Buffer.from(change.content).toString("base64"),
+        encoding: "base64",
+      });
+      tree.push({ path: change.path, mode: "100644" as const, type: "blob" as const, sha: blob.sha });
+    }
+  }
+  const { data: newTree } = await gh.request("POST /repos/{owner}/{repo}/git/trees", {
+    owner,
+    repo,
+    base_tree: head.tree.sha,
+    tree,
+  });
+  const { data: commit } = await gh.request("POST /repos/{owner}/{repo}/git/commits", {
+    owner,
+    repo,
+    message,
+    tree: newTree.sha,
+    parents: [head.sha],
+  });
+  await gh.request("PATCH /repos/{owner}/{repo}/git/refs/{ref}", { owner, repo, ref: `heads/${branch}`, sha: commit.sha });
+  return commit.sha;
+}
+
+/** Paths of all files under `prefix/` on the default branch. */
+export async function listFiles(gh: Gh, owner: string, repo: string, prefix: string): Promise<string[]> {
+  const { data } = await gh.request("GET /repos/{owner}/{repo}/git/trees/{tree_sha}", {
+    owner,
+    repo,
+    tree_sha: "HEAD",
+    recursive: "1",
+  });
+  return data.tree.filter((e) => e.type === "blob" && e.path?.startsWith(`${prefix}/`)).map((e) => e.path!);
+}
+
+/** Text content of a file, or null if it doesn't exist. */
+export async function readFileText(gh: Gh, owner: string, repo: string, filePath: string): Promise<string | null> {
+  try {
+    const { data } = await gh.request("GET /repos/{owner}/{repo}/contents/{path}", { owner, repo, path: filePath });
+    if (Array.isArray(data) || data.type !== "file" || !("content" in data)) return null;
+    return Buffer.from(data.content, "base64").toString("utf8");
+  } catch (err) {
+    if (status(err) === 404) return null;
+    throw err;
+  }
+}
