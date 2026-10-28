@@ -37,7 +37,7 @@ export function SubmissionsTable({
         {FILTERS.map((f) => (
           <Link
             key={f}
-            href={f === "all" ? baseHref : `${baseHref}?filter=${f}`}
+            href={f === "all" ? baseHref : `${baseHref}${baseHref.includes("?") ? "&" : "?"}filter=${f}`}
             className={`rounded-full px-3 py-1 text-xs ${
               f === filter ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
             }`}
@@ -67,7 +67,15 @@ export function SubmissionsTable({
               const repoUrl = r.repoName ? `https://github.com/${org}/${r.repoName}` : null;
               return (
                 <tr key={r.rosterId} className="border-t border-slate-100">
-                  <td className="py-1.5 font-mono">{r.login}</td>
+                  <td className="py-1.5 font-mono">
+                    {r.studentRepoId ? (
+                      <Link href={`${baseHref}${baseHref.includes("?") ? "&" : "?"}student=${r.login}`} className="hover:underline">
+                        {r.login}
+                      </Link>
+                    ) : (
+                      r.login
+                    )}
+                  </td>
                   <td>
                     {repoUrl ? (
                       <a href={repoUrl} className="font-mono text-blue-700 hover:underline">

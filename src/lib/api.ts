@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { safeError } from "./log";
 import { currentUser, type User } from "./session";
@@ -43,4 +44,11 @@ export async function readJson<T = Record<string, unknown>>(req: Request): Promi
   } catch {
     throw new HttpError(400, "Invalid JSON body");
   }
+}
+
+/** Constant-time check of an `Authorization: Bearer <secret>` header. */
+export function bearerMatches(header: string | null, secret: string) {
+  const expected = Buffer.from(`Bearer ${secret}`);
+  const actual = Buffer.from(header ?? "");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }

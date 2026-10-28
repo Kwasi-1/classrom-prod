@@ -2,7 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { db, t } from "@/db";
+import { PostButton } from "@/components/ActionButtons";
 import { NewAssignmentForm } from "@/components/NewAssignmentForm";
+import { env } from "@/lib/env";
 import { RosterImport } from "@/components/RosterImport";
 import { listTemplateRepos } from "@/lib/assignments";
 import { assignmentCounts } from "@/lib/gradebook";
@@ -111,7 +113,7 @@ export default async function ClassroomPage({
         <AssignmentsTab classroom={classroom} org={installation.orgLogin} installationId={installation.githubInstallationId} showNew={sp.new === "1"} />
       )}
       {tab === "roster" && <RosterTab classroomId={classroom.id} />}
-      {tab === "settings" && <SettingsTab org={installation.orgLogin} graderRepo={classroom.graderRepo} />}
+      {tab === "settings" && <SettingsTab classroomId={classroom.id} org={installation.orgLogin} graderRepo={classroom.graderRepo} />}
     </div>
   );
 }
@@ -237,7 +239,7 @@ async function RosterTab({ classroomId }: { classroomId: number }) {
   );
 }
 
-function SettingsTab({ org, graderRepo }: { org: string; graderRepo: string }) {
+function SettingsTab({ classroomId, org, graderRepo }: { classroomId: number; org: string; graderRepo: string }) {
   const repoUrl = `https://github.com/${org}/${graderRepo}`;
   return (
     <div className="space-y-4">
@@ -249,6 +251,19 @@ function SettingsTab({ org, graderRepo }: { org: string; graderRepo: string }) {
           </a>{" "}
           (private). Hidden tests live here; students never get access.
         </p>
+        <p className="mt-3 text-sm text-slate-600">
+          Grading results are posted to <code className="rounded bg-slate-100 px-1">{env().APP_URL}/api/grader/callback</code>.
+          This URL is written into <code>grade.yml</code>; if the app&apos;s URL has changed since the classroom was created,
+          update the workflow.
+        </p>
+        <div className="mt-2">
+          <PostButton
+            url={`/api/classrooms/${classroomId}/grader`}
+            label="Update grader workflow"
+            busyLabel="Committing…"
+            done="Grader workflow updated"
+          />
+        </div>
       </div>
       <div className="card">
         <h3 className="font-medium">Required: add the callback secret</h3>

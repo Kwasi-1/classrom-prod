@@ -6,7 +6,7 @@ GitHub **Free** organization, students submit by pushing, and every push is auto
 Stack: Next.js (App Router) + TypeScript, Neon Postgres via Drizzle ORM, a GitHub App (`@octokit/app`),
 `iron-session` cookies, Tailwind CSS. Deploys to Render.
 
-> Status: **Milestone 4** — through Milestone 3 plus push webhooks → submissions and the teacher submissions table.
+> Status: **Milestone 5** — through Milestone 4 plus autograding: dispatch to the grader repo, two-job workflow with Docker isolation, results callback, scores in the UI.
 
 ---
 
@@ -173,6 +173,43 @@ Rules: only pushes to the repo's default branch count; pushes by the app itself 
 initial commit), branch deletions and pushes to locked repos are ignored. `received_at` is the server's
 time when the webhook arrived — commit timestamps are never used — and `is_late = received_at > deadline`.
 
+## Manual test (Milestone 5)
+
+Grading runs in GitHub Actions in the classroom's `{slug}-grader` repo, and the workflow's *report* job
+POSTs results to `APP_URL/api/grader/callback`. So:
+
+- `APP_URL` must be reachable **from GitHub** — a deployed URL, or a tunnel to your machine
+  (e.g. `cloudflared tunnel --url http://localhost:3000` or ngrok). smee.io only forwards webhooks, not this callback.
+- The callback URL is written into `grade.yml` when the grader repo is seeded. After changing `APP_URL`,
+  open **Classroom → Settings → Update grader workflow** (re-commits the workflow, runner and README).
+- The grader repo must have the `GRADER_CALLBACK_SECRET` secret (Settings tab instructions).
+
+Steps (with the hello-python assignment from Milestone 3):
+1. As the student, push the untouched starter → the row goes `queued` → (≈1–2 min) `graded` **0/50**.
+   Click the student's name to see each test (❌) with its output excerpt (`NotImplementedError`).
+2. Implement `add` correctly and push → **50/50**, all ✅.
+3. Timeout case: make `main` loop forever (`while True: pass`) and push → the io tests fail with
+   `[timed out after 5s]`; the unit tests still pass.
+4. Network isolation: student code runs with `--network none` (e.g. `urllib.request.urlopen(...)` fails).
+5. Delete the grader repo secret and push → status `error` (the callback is rejected, 401). Restore it.
+6. The grader repo's **Actions → grade** shows two jobs per run: `test` (no secrets) and `report`.
+
+How it fits together:
+- Push → submission `queued` → the app sends `repository_dispatch` (`event_type: grade`) to the grader repo with
+  `{ submission_id, assignment, repo, sha, token }`. The token is freshly minted, scoped to that one student
+  repo with `contents: read` only, and expires within an hour.
+- **test** job (untrusted, `permissions: contents: read`, no secrets): checks out the grader and the student
+  commit (`persist-credentials: false`), deletes symlinks, `conftest.py` files and any student files that hidden files
+  replace, then runs `grader/run_tests.py`. Each test runs in
+  `docker run --rm --network none --memory 512m --cpus 1 --pids-limit 256`; the runner kills the container at the
+  per-test timeout. `setup` runs once per image *with* network and *before* hidden files are copied in, then the
+  container is snapshotted so tests run offline.
+- **report** job (trusted, never runs student code): downloads `results.json` (or builds an error result) and
+  POSTs it with `Authorization: Bearer GRADER_CALLBACK_SECRET`.
+- Callback: verifies the bearer token and that `submission_id` matches `sha`, recomputes the score as the sum of
+  `max_points` over passed tests, and stores `graded` (or `error`).
+- If an assignment's autograding is paused, pushes are recorded as `queued` and not dispatched.
+
 ## Project layout
 
 ```
@@ -198,4 +235,6 @@ src/app/c/[slug]/a/[assignment]  assignment page (teacher: tests, publish; stude
 examples/                  hello-python template + matching tests
 src/lib/submissions.ts     push webhook → submission rows
 src/lib/gradebook.ts       per-student latest submission, filters, per-assignment counts
+src/lib/grading.ts         dispatch to the grader repo; callback validation + scoring
+src/app/api/grader/callback  results from the grader's report job
 ```

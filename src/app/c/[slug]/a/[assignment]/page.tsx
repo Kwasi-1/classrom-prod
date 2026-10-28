@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import { db, t } from "@/db";
 import { CopyField, PublishButton } from "@/components/ActionButtons";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { StudentSubmissions } from "@/components/StudentSubmissions";
 import { SubmissionsTable } from "@/components/SubmissionsTable";
 import { TestsUpload } from "@/components/TestsUpload";
 import { inviteUrl, loadAssignmentBySlugs, testsDir } from "@/lib/assignments";
@@ -28,7 +29,7 @@ export default async function AssignmentPage({
   searchParams,
 }: {
   params: Promise<{ slug: string; assignment: string }>;
-  searchParams: Promise<{ filter?: string; tab?: string }>;
+  searchParams: Promise<{ filter?: string; tab?: string; student?: string }>;
 }) {
   const { slug, assignment: assignmentSlug } = await params;
   const sp = await searchParams;
@@ -137,10 +138,14 @@ export default async function AssignmentPage({
       </nav>
 
       {tab === "submissions" ? (
-        <>
-          <AutoRefresh seconds={10} />
-          <SubmissionsTable rows={await gradebook(classroom.id, assignment.id)} org={org} filter={filter} baseHref={`${base}?tab=submissions`} />
-        </>
+        <SubmissionsTab
+          classroomId={classroom.id}
+          assignmentId={assignment.id}
+          org={org}
+          filter={filter}
+          student={sp.student}
+          base={`${base}?tab=submissions`}
+        />
       ) : (
         <TestsTab
           assignmentId={assignment.id}
@@ -166,4 +171,32 @@ async function TestsTab(props: { assignmentId: number; dir: string; org: string;
   } catch (err) {
     return <p className="rounded-md bg-red-50 p-3 text-sm text-red-700">Could not read the grader repo: {safeError(err)}</p>;
   }
+}
+
+async function SubmissionsTab(props: {
+  classroomId: number;
+  assignmentId: number;
+  org: string;
+  filter: Filter;
+  student?: string;
+  base: string;
+}) {
+  const { classroomId, assignmentId, org, filter, student, base } = props;
+  const rows = await gradebook(classroomId, assignmentId);
+  const selected = student ? rows.find((r) => r.login === student.toLowerCase() && r.studentRepoId) : undefined;
+  const listHref = filter === "all" ? base : `${base}&filter=${filter}`;
+  return (
+    <>
+      <AutoRefresh seconds={10} />
+      {selected?.studentRepoId && (
+        <StudentSubmissions
+          studentRepoId={selected.studentRepoId}
+          login={selected.login}
+          repoUrl={`https://github.com/${org}/${selected.repoName}`}
+          closeHref={listHref}
+        />
+      )}
+      <SubmissionsTable rows={rows} org={org} filter={filter} baseHref={base} />
+    </>
+  );
 }

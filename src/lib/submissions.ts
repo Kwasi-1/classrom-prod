@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db, t } from "@/db";
 import type { SubmissionResults } from "@/db/schema";
 import { getAppInfo } from "./github";
+import { dispatchGrading } from "./grading";
 import { safeError } from "./log";
 
 export type PushPayload = {
@@ -82,5 +83,5 @@ export async function handlePush(p: PushPayload) {
   const submission = await recordSubmission(row.studentRepo.id, row.assignment.deadline, p.after, "webhook");
   if (!submission) return;
   console.info(`[push] ${repoName}@${p.after.slice(0, 7)} → submission ${submission.id}${submission.isLate ? " (late)" : ""}`);
-  // Grading dispatch is added in milestone 5 (skipped while autograde_paused is set).
+  if (!row.assignment.autogradePaused) await dispatchGrading(submission.id);
 }

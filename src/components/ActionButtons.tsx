@@ -76,3 +76,31 @@ export function AcceptButton({ inviteCode }: { inviteCode: string }) {
     </div>
   );
 }
+
+/** POSTs to `url` and refreshes; shows the server's error message on failure. */
+export function PostButton({ url, label, busyLabel, done }: { url: string; label: string; busyLabel: string; done?: string }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <button
+        type="button"
+        className="btn-secondary"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setMessage(null);
+          const res = await fetch(url, { method: "POST" });
+          const body = await res.json().catch(() => ({}));
+          setBusy(false);
+          setMessage(res.ok ? { ok: true, text: done ?? "Done" } : { ok: false, text: body.error ?? "Failed" });
+          if (res.ok) router.refresh();
+        }}
+      >
+        {busy ? busyLabel : label}
+      </button>
+      {message && <span className={`text-sm ${message.ok ? "text-green-700" : "text-red-600"}`}>{message.text}</span>}
+    </div>
+  );
+}

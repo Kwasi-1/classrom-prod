@@ -70,6 +70,8 @@ export async function getAppInfo() {
 type TokenScope = {
   repositories?: string[];
   permissions?: Record<string, "read" | "write">;
+  /** Skip the cache and always mint a new token (used for tokens handed to the grader). */
+  fresh?: boolean;
 };
 
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
@@ -80,8 +82,8 @@ const REFRESH_MARGIN_MS = 5 * 60 * 1000;
  */
 export async function installationToken(installationId: number, scope?: TokenScope): Promise<string> {
   const tokens = (globalForGh.__ghTokens ??= new Map());
-  const key = `${installationId}:${JSON.stringify(scope ?? {})}`;
-  const hit = tokens.get(key);
+  const key = `${installationId}:${JSON.stringify({ repositories: scope?.repositories, permissions: scope?.permissions })}`;
+  const hit = scope?.fresh ? undefined : tokens.get(key);
   if (hit && hit.expiresAt - REFRESH_MARGIN_MS > Date.now()) return hit.token;
 
   const { data } = await appOctokit().request("POST /app/installations/{installation_id}/access_tokens", {
@@ -89,7 +91,7 @@ export async function installationToken(installationId: number, scope?: TokenSco
     ...(scope?.repositories ? { repositories: scope.repositories } : {}),
     ...(scope?.permissions ? { permissions: scope.permissions } : {}),
   });
-  tokens.set(key, { token: data.token, expiresAt: Date.parse(data.expires_at) });
+  if (!scope?.fresh) tokens.set(key, { token: data.token, expiresAt: Date.parse(data.expires_at) });
   return data.token;
 }
 
