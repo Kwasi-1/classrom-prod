@@ -93,6 +93,13 @@ async function main() {
     .onConflictDoUpdate({ target: t.classrooms.slug, set: { ownerUserId: owner.id } })
     .returning();
 
+  const [ta] = await db
+    .insert(t.users)
+    .values({ githubId: -2, githubLogin: "demo-ta", name: "Demo TA" })
+    .onConflictDoUpdate({ target: t.users.githubId, set: { name: "Demo TA" } })
+    .returning();
+  await db.insert(t.classroomStaff).values({ classroomId: classroom.id, userId: ta.id }).onConflictDoNothing();
+
   // Every student except the last has signed in once, so they have a user row (and can use the dev login).
   const logins = ["kwame-dev", "ama-codes", "kofi-k", "efua-py", "yaw-builds", "akosua-js", "kojo-rs", "abena-go"];
   const rosterIds = new Map<string, number>();
@@ -242,8 +249,8 @@ async function main() {
   }
 
   console.log(`Seeded classroom "${classroom.name}" (/c/${classroom.slug}) owned by ${owner.githubLogin}:`);
-  console.log(`  ${logins.length} students, assignments hw1 (closed), hw2 (published), hw3 (draft).`);
-  console.log(`  Dev sign-in: http://localhost:3000/api/dev/login?as=${owner.githubLogin}  (student: ?as=kwame-dev)`);
+  console.log(`  ${logins.length} students, staff demo-ta, assignments hw1 (closed), hw2 (published), hw3 (draft).`);
+  console.log(`  Dev sign-in: http://localhost:3000/api/dev/login?as=${owner.githubLogin}  (TA: ?as=demo-ta, student: ?as=kwame-dev)`);
   await pool.end();
 }
 

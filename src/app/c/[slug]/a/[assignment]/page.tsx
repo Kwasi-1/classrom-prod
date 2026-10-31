@@ -40,6 +40,8 @@ export default async function AssignmentPage({
   if (!row) notFound();
   const role = await classroomRole(row.classroom, user);
   if (!role) notFound();
+  // Drafts are invisible to students, matching the classroom page's assignment list.
+  if (role === "student" && row.assignment.status === "draft") notFound();
   const { assignment, classroom, installation } = row;
   const org = installation.orgLogin;
 

@@ -6,6 +6,7 @@ import { PostButton } from "@/components/ActionButtons";
 import { NewAssignmentForm } from "@/components/NewAssignmentForm";
 import { env } from "@/lib/env";
 import { RosterImport } from "@/components/RosterImport";
+import { StaffManager } from "@/components/StaffManager";
 import { listTemplateRepos } from "@/lib/assignments";
 import { assignmentCounts } from "@/lib/gradebook";
 import { installationOctokit } from "@/lib/github";
@@ -13,6 +14,7 @@ import { safeError } from "@/lib/log";
 import { classroomRole, loadClassroom, type Classroom } from "@/lib/roles";
 import { COMBINED_SLUG_MAX } from "@/lib/slug";
 import { requireUser } from "@/lib/session";
+import { listStaff } from "@/lib/staff";
 import { fmtTime } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
@@ -144,7 +146,15 @@ export default async function ClassroomPage({
         <AssignmentsTab classroom={classroom} org={installation.orgLogin} installationId={installation.githubInstallationId} showNew={sp.new === "1"} />
       )}
       {tab === "roster" && <RosterTab classroomId={classroom.id} />}
-      {tab === "settings" && <SettingsTab classroomId={classroom.id} org={installation.orgLogin} graderRepo={classroom.graderRepo} />}
+      {tab === "settings" && (
+        <SettingsTab
+          classroomId={classroom.id}
+          org={installation.orgLogin}
+          graderRepo={classroom.graderRepo}
+          ownerUserId={classroom.ownerUserId}
+          viewerId={user.id}
+        />
+      )}
     </div>
   );
 }
@@ -270,10 +280,27 @@ async function RosterTab({ classroomId }: { classroomId: number }) {
   );
 }
 
-function SettingsTab({ classroomId, org, graderRepo }: { classroomId: number; org: string; graderRepo: string }) {
+async function SettingsTab({
+  classroomId,
+  org,
+  graderRepo,
+  ownerUserId,
+  viewerId,
+}: {
+  classroomId: number;
+  org: string;
+  graderRepo: string;
+  ownerUserId: number;
+  viewerId: number;
+}) {
   const repoUrl = `https://github.com/${org}/${graderRepo}`;
+  const [[owner], staff] = await Promise.all([
+    db.select({ login: t.users.githubLogin, name: t.users.name }).from(t.users).where(eq(t.users.id, ownerUserId)),
+    listStaff(classroomId),
+  ]);
   return (
     <div className="space-y-4">
+      <StaffManager classroomId={classroomId} owner={owner} staff={staff} canManage={viewerId === ownerUserId} />
       <div className="card">
         <h3 className="font-medium">Grader repository</h3>
         <p className="mt-1 text-sm">
