@@ -241,6 +241,28 @@ How it fits together:
 
 ## Deploy to Render
 
+### Free plan (current `render.yaml`)
+
+1. **New → Blueprint** → this repo. It creates one free web service `classroom` in Frankfurt. Migrations run during
+   the build (`npm run db:migrate`), because pre-deploy commands are a paid feature.
+2. Register the GitHub App against the service URL (writes every production variable to `render.env`):
+   ```bash
+   npm run github:register -- --org YOUR_ORG --url https://YOUR-SERVICE.onrender.com
+   ```
+   Then **Environment → Add from .env** → paste `render.env` → save (redeploys).
+3. Install the app on the org (the script prints the link) and sign in.
+4. Scheduled jobs and keep-alive via [cron-job.org](https://cron-job.org) (free), since Render cron jobs are paid:
+
+   | Job | Schedule | Request |
+   |---|---|---|
+   | keep-alive | every 10 min | `GET  APP_URL/api/health` |
+   | lock | every 30 min | `POST APP_URL/api/cron/lock` + header `Authorization: Bearer CRON_SECRET` |
+   | reconcile | daily 02:00 | `POST APP_URL/api/cron/reconcile` + same header |
+
+To upgrade later, set `plan: starter` in `render.yaml`.
+
+### Paid plan
+
 [`render.yaml`](render.yaml) is a Blueprint for one **web service** (Starter, always-on) and two **cron jobs**.
 
 1. Push this repo to GitHub, then in Render: **New → Blueprint** → pick the repo. Render creates

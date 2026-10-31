@@ -1,17 +1,27 @@
-# Render Blueprint: web service + two cron jobs. Secrets are set in the dashboard (sync: false).
+# Render Blueprint: one free web service in Frankfurt (next to the Neon database).
+# Secrets are set in the dashboard (sync: false); `npm run github:register` writes them all to render.env,
+# which can be pasted in via Environment → "Add from .env".
+#
+# Free plan notes:
+# - Pre-deploy commands and cron jobs are paid features, so migrations run during the build and the
+#   lock/reconcile jobs are called by an external scheduler (e.g. cron-job.org; see README).
+# - Free services sleep after ~15 minutes idle; the same scheduler pings /api/health to keep it awake.
+# To upgrade: set plan: starter. Nothing else changes.
 services:
   - type: web
     name: classroom
     runtime: node
-    plan: starter
-    buildCommand: npm ci && npm run build
-    preDeployCommand: npm run db:migrate
+    plan: free
+    region: frankfurt
+    buildCommand: npm ci && npm run db:migrate && npm run build
     startCommand: npm start
-    healthCheckPath: /
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: "24"
       - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_UNPOOLED
         sync: false
       - key: GITHUB_APP_ID
         sync: false
@@ -24,37 +34,9 @@ services:
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
       - key: SESSION_SECRET
-        generateValue: true
+        sync: false
       - key: GRADER_CALLBACK_SECRET
         sync: false
-      - key: CRON_SECRET
-        sync: false
-      - key: APP_URL
-        sync: false
-
-  # Locks repos of assignments past their deadline (every 5 minutes).
-  - type: cron
-    name: classroom-cron-lock
-    runtime: node
-    plan: starter
-    schedule: "*/5 * * * *"
-    buildCommand: "true"
-    startCommand: 'curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/cron/lock"'
-    envVars:
-      - key: CRON_SECRET
-        sync: false
-      - key: APP_URL
-        sync: false
-
-  # Records head commits whose push webhooks were missed (nightly, 02:00 UTC = 02:00 Accra).
-  - type: cron
-    name: classroom-cron-reconcile
-    runtime: node
-    plan: starter
-    schedule: "0 2 * * *"
-    buildCommand: "true"
-    startCommand: 'curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" "$APP_URL/api/cron/reconcile"'
-    envVars:
       - key: CRON_SECRET
         sync: false
       - key: APP_URL
