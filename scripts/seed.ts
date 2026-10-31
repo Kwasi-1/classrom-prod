@@ -8,13 +8,21 @@
  * Pass your GitHub login to be the demo classroom's owner (sign in once first so your user row exists);
  * otherwise a "demo-teacher" user owns it. In development, sign in as any seeded user with
  * /api/dev/login?as=demo-teacher (or a student, e.g. kwame-dev). Re-running resets the demo assignments.
+ *
+ * Uses the local dev database from .env.development.local and refuses to write demo data to Neon.
  */
-import "dotenv/config";
+import { config } from "dotenv";
 import { randomBytes } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as t from "../src/db/schema";
+
+config({ path: [".env.development.local", ".env"], quiet: true });
+if (/neon\.tech/.test(process.env.DATABASE_URL ?? "")) {
+  console.error("Refusing to seed demo data into Neon. Point DATABASE_URL in .env.development.local at a local database.");
+  process.exit(1);
+}
 
 const MIN = 60 * 1000;
 const DAY = 24 * 60 * MIN;
