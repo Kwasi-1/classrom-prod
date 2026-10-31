@@ -5,3 +5,6 @@ node_modules
 *.pem
 next-env.d.ts
 *.tsbuildinfo
+.env.backup
+.env.before-neon
+.neon

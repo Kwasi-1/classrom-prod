@@ -12,6 +12,8 @@
     "db:seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
+    "@neon/config": "^1.10.0",
+    "@neon/env": "^1.6.8",
     "@octokit/app": "^16.1.4",
     "@octokit/core": "^7.0.8",
     "@octokit/webhooks": "^14.2.0",
